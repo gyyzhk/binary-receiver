@@ -16,6 +16,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 import pygame
 import shutil
+import io
 
 # 全局变量
 SERVER_PORT = 8080
@@ -33,22 +34,30 @@ SILENCE_DURATION = 3  # 静音3秒则分段
 class AudioReceiverGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("火场音频回传 PC接收端 v2.3")
-        self.root.geometry("900x700")
+        self.root.title("火场音频回传 PC接收端 v2.4")
+        self.root.geometry("900x750")
         
         # 状态变量
         self.running = False
         self.server_socket = None
-        self.clients = {}  # {addr: {'device_id': xxx, 'file': xxx, 'start_time': xxx, 'silent_time': 0}}
+        self.clients = {}  # {addr: {'device_id': xxx, 'file': xxx, 'start_time': xxx, 'silent_time': 0, 'audio_buffer': []}}
         self.received_files = []
+        
+        # 监听相关
+        self.monitoring = False
+        self.monitor_device = None
+        self.monitor_thread = None
+        self.audio_buffer = []
+        self.buffer_lock = threading.Lock()
         
         # 音量数据（用于图表）
         self.volume_data = []
         
         # 初始化pygame（用于播放）
         try:
-            pygame.mixer.init()
-        except:
+            pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=CHANNELS, buffer=512)
+        except Exception as e:
+            print(f"pygame init failed: {e}")
             pass
         
         self.create_ui()
@@ -62,12 +71,12 @@ class AudioReceiverGUI:
         # 作者版本信息
         info_frame = ttk.Frame(top_frame)
         info_frame.grid(row=0, column=0, columnspan=8, sticky=tk.W)
-        ttk.Label(info_frame, text="作者:一棵桔子  |  版本:V2.3", foreground="blue", font=('Arial', 10)).pack(side=tk.LEFT)
+        ttk.Label(info_frame, text="作者:一棵桔子  |  版本:V2.4", foreground="blue", font=('Arial', 10)).pack(side=tk.LEFT)
         
         # 服务器状态
         ttk.Label(top_frame, text="服务器状态:").grid(row=1, column=0, sticky=tk.W)
         self.status_label = ttk.Label(top_frame, text="未启动", foreground="red", font=('Arial', 12, 'bold'))
-        self.status_label.grid(row=0, column=1, sticky=tk.W, padx=5)
+        self.status_label.grid(row=1, column=1, sticky=tk.W, padx=5)
         
         # 端口设置
         ttk.Label(top_frame, text="端口:").grid(row=1, column=2, sticky=tk.W, padx=(20,0))
@@ -88,11 +97,33 @@ class AudioReceiverGUI:
         self.stop_btn = ttk.Button(top_frame, text="停止服务", command=self.stop_server, state=tk.DISABLED, width=12)
         self.stop_btn.grid(row=1, column=7, sticky=tk.W)
         
+        # ===== 监听控制 =====
+        monitor_frame = ttk.LabelFrame(self.root, text="实时监听", padding=5)
+        monitor_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        monitor_top = ttk.Frame(monitor_frame)
+        monitor_top.pack(fill=tk.X)
+        
+        ttk.Label(monitor_top, text="选择设备:").pack(side=tk.LEFT)
+        
+        self.device_combo = ttk.Combobox(monitor_top, width=25, state='readonly')
+        self.device_combo.pack(side=tk.LEFT, padx=5)
+        
+        self.monitor_btn = ttk.Button(monitor_top, text="开始监听", command=self.toggle_monitor, width=12)
+        self.monitor_btn.pack(side=tk.LEFT, padx=10)
+        
+        self.monitor_status = ttk.Label(monitor_top, text="未监听", foreground="gray")
+        self.monitor_status.pack(side=tk.LEFT, padx=10)
+        
+        # 监听音量条
+        self.monitor_canvas = tk.Canvas(monitor_frame, height=40, bg='black')
+        self.monitor_canvas.pack(fill=tk.X, pady=5)
+        
         # ===== 音量显示 =====
         volume_frame = ttk.LabelFrame(self.root, text="实时音量", padding=5)
         volume_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        self.volume_canvas = tk.Canvas(volume_frame, height=80, bg='black')
+        self.volume_canvas = tk.Canvas(volume_frame, height=60, bg='black')
         self.volume_canvas.pack(fill=tk.X)
         
         # ===== 主界面：设备列表 + 文件列表 =====
@@ -103,7 +134,7 @@ class AudioReceiverGUI:
         device_frame = ttk.LabelFrame(main_frame, text="在线设备", padding=5)
         device_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0,5))
         
-        self.devices_listbox = tk.Listbox(device_frame, height=10)
+        self.devices_listbox = tk.Listbox(device_frame, height=8)
         self.devices_listbox.pack(fill=tk.BOTH, expand=True)
         
         # 设备详情
@@ -136,7 +167,7 @@ class AudioReceiverGUI:
         log_frame = ttk.LabelFrame(self.root, text="接收日志", padding=5)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=8, state=tk.DISABLED)
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=6, state=tk.DISABLED)
         self.log_text.pack(fill=tk.BOTH, expand=True)
         
         # 音量更新定时器
@@ -188,6 +219,10 @@ class AudioReceiverGUI:
             self.log(f"启动失败: {e}")
     
     def stop_server(self):
+        # 先停止监听
+        if self.monitoring:
+            self.toggle_monitor()
+        
         self.running = False
         
         # 关闭所有客户端
@@ -243,9 +278,13 @@ class AudioReceiverGUI:
                             'file_path': None,
                             'start_time': time.time(),
                             'silent_time': 0,
-                            'last_volume': 0
+                            'last_volume': 0,
+                            'audio_buffer': []  # 音频缓冲区
                         }
                         self.clients[addr] = client_info
+                        
+                        # 更新设备下拉框
+                        self.root.after(100, self.update_device_combo)
                         
                         # 启动接收线程
                         recv_thread = threading.Thread(target=self.receive_audio, args=(addr,), daemon=True)
@@ -301,6 +340,14 @@ class AudioReceiverGUI:
                     # 计算音量
                     volume = self.calculate_rms(data)
                     client_info['last_volume'] = volume
+                    
+                    # 添加到监听缓冲区
+                    if self.monitoring and self.monitor_device == device_id:
+                        with self.buffer_lock:
+                            self.audio_buffer.append(data)
+                            # 保持缓冲区不要太大
+                            if len(self.audio_buffer) > 50:
+                                self.audio_buffer = self.audio_buffer[-30:]
                     
                     if volume > SILENCE_THRESHOLD:
                         # 有声音
@@ -383,8 +430,125 @@ class AudioReceiverGUI:
         if addr in self.clients:
             del self.clients[addr]
         
+        # 更新设备下拉框
+        self.root.after(100, self.update_device_combo)
         self.update_devices_list()
         self.log(f"设备断开: {device_id}")
+    
+    def update_device_combo(self):
+        """更新设备下拉框"""
+        device_ids = []
+        for addr, info in self.clients.items():
+            device_ids.append(info['device_id'])
+        
+        self.device_combo['values'] = device_ids
+        if device_ids:
+            if self.device_combo.get() not in device_ids:
+                self.device_combo.current(0)
+        else:
+            self.device_combo.set('')
+    
+    def toggle_monitor(self):
+        """切换监听状态"""
+        if self.monitoring:
+            # 停止监听
+            self.monitoring = False
+            self.monitor_device = None
+            self.monitor_btn.config(text="开始监听")
+            self.monitor_status.config(text="未监听", foreground="gray")
+            self.log("监听已停止")
+        else:
+            # 开始监听
+            selected = self.device_combo.get()
+            if not selected:
+                messagebox.showwarning("提示", "请先选择要监听的设备")
+                return
+            
+            # 检查设备是否在线
+            device_online = False
+            for addr, info in self.clients.items():
+                if info['device_id'] == selected:
+                    device_online = True
+                    break
+            
+            if not device_online:
+                messagebox.showwarning("提示", "设备已离线，请重新选择")
+                return
+            
+            self.monitoring = True
+            self.monitor_device = selected
+            
+            # 清空缓冲区
+            with self.buffer_lock:
+                self.audio_buffer = []
+            
+            self.monitor_btn.config(text="停止监听")
+            self.monitor_status.config(text=f"监听中: {selected}", foreground="green")
+            self.log(f"开始监听: {selected}")
+            
+            # 启动播放线程
+            if self.monitor_thread is None or not self.monitor_thread.is_alive():
+                self.monitor_thread = threading.Thread(target=self.play_audio_stream, daemon=True)
+                self.monitor_thread.start()
+    
+    def play_audio_stream(self):
+        """播放音频流"""
+        try:
+            sound_queue = []
+            last_play_time = time.time()
+            
+            while self.monitoring:
+                # 从缓冲区获取音频数据
+                with self.buffer_lock:
+                    if self.audio_buffer:
+                        # 合并所有缓冲数据
+                        audio_data = b''.join(self.audio_buffer)
+                        self.audio_buffer = []
+                
+                if audio_data:
+                    try:
+                        # 创建 pygame Sound 对象并播放
+                        sound = pygame.mixer.Sound(buffer=audio_data)
+                        sound.play()
+                        
+                        # 计算播放的音量用于显示
+                        vol = self.calculate_rms(audio_data)
+                        
+                        # 更新监听音量显示
+                        self.root.after(0, lambda v=vol: self.update_monitor_volume(v))
+                        
+                        audio_data = None
+                        
+                    except Exception as e:
+                        pass
+                
+                time.sleep(0.05)  # 短暂休眠，避免CPU过高
+                
+        except Exception as e:
+            self.root.after(0, lambda: self.log(f"监听播放错误: {e}"))
+    
+    def update_monitor_volume(self, volume):
+        """更新监听音量显示"""
+        self.monitor_canvas.delete('all')
+        
+        bar_width = 800
+        bar_height = 40
+        
+        vol_percent = min(1.0, volume / 32767)
+        fill_width = int(bar_width * vol_percent)
+        
+        if vol_percent < 0.3:
+            color = 'green'
+        elif vol_percent < 0.7:
+            color = 'yellow'
+        else:
+            color = 'red'
+        
+        self.monitor_canvas.create_rectangle(0, 0, bar_width, bar_height, fill='#333333', outline='')
+        if fill_width > 0:
+            self.monitor_canvas.create_rectangle(0, 0, fill_width, bar_height, fill=color, outline='')
+        
+        self.monitor_canvas.create_text(10, 20, text=f"监听音量: {volume}", fill='white', anchor=tk.W, font=('Arial', 12))
     
     def calculate_rms(self, data):
         """计算音频RMS音量"""
@@ -406,7 +570,8 @@ class AudioReceiverGUI:
         self.devices_listbox.delete(0, tk.END)
         for addr, info in self.clients.items():
             duration = int(time.time() - info['start_time'])
-            self.devices_listbox.insert(tk.END, f"{info['device_id']} | {addr[0]} | {duration}秒")
+            marker = "🔊" if self.monitoring and self.monitor_device == info['device_id'] else ""
+            self.devices_listbox.insert(tk.END, f"{info['device_id']} | {addr[0]} | {duration}秒 {marker}")
     
     def load_received_files(self):
         self.received_files = []

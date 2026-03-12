@@ -9,11 +9,12 @@
 - 📱 多设备支持
 - 🎵 自动转MP3
 - 📝 实时日志
+- 👂 **实时监听** - 可选择设备实时播放声音
 
 ## 环境要求
 
 - Python 3.7+
-- pygame
+- pygame (`pip install pygame`)
 - ffmpeg (可选，用于转MP3)
 
 ## 安装
