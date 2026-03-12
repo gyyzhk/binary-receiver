@@ -33,7 +33,7 @@ SILENCE_DURATION = 3  # 静音3秒则分段
 class AudioReceiverGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("二进制回传 PC接收端 v2.0")
+        self.root.title("火场音频回传 PC接收端 v2.3")
         self.root.geometry("900x700")
         
         # 状态变量
@@ -59,29 +59,34 @@ class AudioReceiverGUI:
         top_frame = ttk.Frame(self.root)
         top_frame.pack(fill=tk.X, padx=10, pady=5)
         
+        # 作者版本信息
+        info_frame = ttk.Frame(top_frame)
+        info_frame.grid(row=0, column=0, columnspan=8, sticky=tk.W)
+        ttk.Label(info_frame, text="作者:一棵桔子  |  版本:V2.3", foreground="blue", font=('Arial', 10)).pack(side=tk.LEFT)
+        
         # 服务器状态
-        ttk.Label(top_frame, text="服务器状态:").grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(top_frame, text="服务器状态:").grid(row=1, column=0, sticky=tk.W)
         self.status_label = ttk.Label(top_frame, text="未启动", foreground="red", font=('Arial', 12, 'bold'))
         self.status_label.grid(row=0, column=1, sticky=tk.W, padx=5)
         
         # 端口设置
-        ttk.Label(top_frame, text="端口:").grid(row=0, column=2, sticky=tk.W, padx=(20,0))
+        ttk.Label(top_frame, text="端口:").grid(row=1, column=2, sticky=tk.W, padx=(20,0))
         self.port_entry = ttk.Entry(top_frame, width=8)
         self.port_entry.insert(0, str(SERVER_PORT))
-        self.port_entry.grid(row=0, column=3, sticky=tk.W, padx=5)
+        self.port_entry.grid(row=1, column=3, sticky=tk.W, padx=5)
         
         # 静音阈值设置
-        ttk.Label(top_frame, text="静音阈值:").grid(row=0, column=4, sticky=tk.W, padx=(20,0))
+        ttk.Label(top_frame, text="静音阈值:").grid(row=1, column=4, sticky=tk.W, padx=(20,0))
         self.silence_entry = ttk.Entry(top_frame, width=6)
         self.silence_entry.insert(0, str(SILENCE_THRESHOLD))
-        self.silence_entry.grid(row=0, column=5, sticky=tk.W, padx=5)
+        self.silence_entry.grid(row=1, column=5, sticky=tk.W, padx=5)
         
         # 控制按钮
         self.start_btn = ttk.Button(top_frame, text="启动服务", command=self.start_server, width=12)
-        self.start_btn.grid(row=0, column=6, sticky=tk.W, padx=20)
+        self.start_btn.grid(row=1, column=6, sticky=tk.W, padx=20)
         
         self.stop_btn = ttk.Button(top_frame, text="停止服务", command=self.stop_server, state=tk.DISABLED, width=12)
-        self.stop_btn.grid(row=0, column=7, sticky=tk.W)
+        self.stop_btn.grid(row=1, column=7, sticky=tk.W)
         
         # ===== 音量显示 =====
         volume_frame = ttk.LabelFrame(self.root, text="实时音量", padding=5)
