@@ -1,0 +1,53 @@
+# 火场音频回传 PC端 V3.0 (PySide6版)
+
+## 环境要求
+
+- Python 3.8+
+- Windows / macOS / Linux
+
+## 安装步骤
+
+### 1. 安装 Python
+
+如果还没有 Python，请先下载安装：
+https://www.python.org/downloads/
+
+**注意**：安装时勾选 "Add Python to PATH"
+
+### 2. 安装依赖
+
+打开命令行（CMD），运行：
+
+```bash
+pip install PySide6 pygame
+```
+
+### 3. 运行程序
+
+```bash
+python receiver_gui_v3_pyside6.py
+```
+
+## 功能说明
+
+- 🎚️ 实时音量显示
+- 📱 多设备支持
+- 👂 实时监听
+- 📁 文件按时间排序
+
+## 配置
+
+- 默认端口: 119
+- 录音保存位置: `received/` 文件夹
+
+## 问题解决
+
+如果遇到问题：
+1. 确保 Python 已添加到系统 PATH
+2. 确保端口 119 未被占用
+3. 关闭防火墙或添加例外
+
+---
+
+作者:一棵桔子
+版本:V3.0
